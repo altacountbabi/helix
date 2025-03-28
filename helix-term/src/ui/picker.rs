@@ -6,11 +6,10 @@ use crate::{
     compositor::{self, Component, Compositor, Context, Event, EventResult},
     ctrl, key, shift,
     ui::{
-        self,
-        document::{render_document, LinePos, TextRenderer},
+        self, EditorView,
+        document::{LinePos, TextRenderer, render_document},
         picker::query::PickerQuery,
         text_decorations::DecorationManager,
-        EditorView,
     },
 };
 use futures_util::future::BoxFuture;
@@ -34,23 +33,23 @@ use std::{
     io::Read,
     path::Path,
     sync::{
-        atomic::{self, AtomicUsize},
         Arc,
+        atomic::{self, AtomicUsize},
     },
 };
 
 use crate::ui::{Prompt, PromptEvent};
 use helix_core::{
-    char_idx_at_visual_offset, fuzzy::MATCHER, movement::Direction,
-    text_annotations::TextAnnotations, unicode::segmentation::UnicodeSegmentation, Position,
+    Position, char_idx_at_visual_offset, fuzzy::MATCHER, movement::Direction,
+    text_annotations::TextAnnotations, unicode::segmentation::UnicodeSegmentation,
 };
 use helix_view::{
+    Document, DocumentId, Editor,
     editor::Action,
     graphics::{CursorKind, Margin, Modifier, Rect},
     input::KeyEvent,
     theme::Style,
     view::ViewPosition,
-    Document, DocumentId, Editor,
 };
 
 use self::handlers::{DynamicQueryChange, DynamicQueryHandler, PreviewHighlightHandler};
@@ -511,11 +510,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     }
 
     fn header_height(&self) -> u16 {
-        if self.columns.len() > 1 {
-            1
-        } else {
-            0
-        }
+        if self.columns.len() > 1 { 1 } else { 0 }
     }
 
     pub fn toggle_preview(&mut self) {

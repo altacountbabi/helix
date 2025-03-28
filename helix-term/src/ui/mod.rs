@@ -160,7 +160,7 @@ pub fn raw_regex_prompt(
                                 let callback = async move {
                                     let call: job::Callback = Callback::EditorCompositor(Box::new(
                                         move |_editor: &mut Editor, compositor: &mut Compositor| {
-                                            let contents = Text::new(format!("{}", err));
+                                            let contents = Text::new(format!("{err}"));
                                             let size = compositor.size();
                                             let popup = Popup::new("invalid-regex", contents)
                                                 .position(Some(helix_core::Position::new(
@@ -191,8 +191,9 @@ pub fn raw_regex_prompt(
 
 type FilePicker = Picker<PathBuf, PathBuf>;
 
+#[allow(clippy::missing_panics_doc)]
 pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePicker {
-    use ignore::{types::TypesBuilder, WalkBuilder};
+    use ignore::{WalkBuilder, types::TypesBuilder};
     use std::time::Instant;
 
     let now = Instant::now();
@@ -209,7 +210,7 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePi
         .git_ignore(config.file_picker.git_ignore)
         .git_global(config.file_picker.git_global)
         .git_exclude(config.file_picker.git_exclude)
-        .sort_by_file_name(|name1, name2| name1.cmp(name2))
+        .sort_by_file_name(Ord::cmp)
         .max_depth(config.file_picker.max_depth)
         .filter_entry(move |entry| filter_picker_entry(entry, &absolute_root, dedup_symlinks));
 
@@ -250,7 +251,7 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePi
     let picker = Picker::new(columns, 0, [], root, move |cx, path: &PathBuf, action| {
         if let Err(e) = cx.editor.open(path, action) {
             let err = if let Some(err) = e.source() {
-                format!("{}", err)
+                format!("{err}")
             } else {
                 format!("unable to open \"{}\"", path.display())
             };
@@ -381,7 +382,7 @@ fn create_file_operation_prompt<F>(
                         };
                     } else {
                         cx.editor
-                            .set_error("Unable to determine path of selected file")
+                            .set_error("Unable to determine path of selected file");
                     }
                 },
             );
@@ -402,6 +403,7 @@ fn refresh_file_explorer(cursor: u32, cx: &mut Context, root: PathBuf) {
         let call: Callback = Callback::EditorCompositor(Box::new(move |editor, compositor| {
             // replace the old file explorer with the new one
             compositor.pop();
+            let root = editor.file_explorer_cwd.clone().unwrap_or(root);
             if let Ok(picker) = file_explorer(Some(cursor), root, editor) {
                 compositor.push(Box::new(overlay::overlaid(picker)));
             }
@@ -411,10 +413,11 @@ fn refresh_file_explorer(cursor: u32, cx: &mut Context, root: PathBuf) {
     cx.jobs.callback(callback);
 }
 
+#[allow(clippy::too_many_lines, clippy::missing_errors_doc)]
 pub fn file_explorer(
     cursor: Option<u32>,
     root: PathBuf,
-    editor: &Editor,
+    editor: &mut Editor,
 ) -> Result<FileExplorer, std::io::Error> {
     let directory_style = editor.theme.get("ui.text.directory");
     let directory_content = directory_content(&root)?;
@@ -426,7 +429,7 @@ pub fn file_explorer(
             .unwrap_or(cx.editor.config().default_yank_register);
         let path = helix_stdx::path::get_relative_path(path);
         let path = path.to_string_lossy().to_string();
-        let message = format!("Yanked path {} to register {register}", path);
+        let message = format!("Yanked path {path} to register {register}");
 
         match cx.editor.registers.write(register, vec![path]) {
             Ok(()) => cx.editor.set_status(message),
@@ -496,7 +499,7 @@ pub fn file_explorer(
                     },
                 )
             },
-        )
+        );
     });
 
     let move_: KeyHandler = Box::new(|cx, (path, _), data, cursor| {
@@ -511,7 +514,7 @@ pub fn file_explorer(
 
                 confirm_before_overwriting(
                     move_to.to_path_buf(),
-                    move_from.to_path_buf(),
+                    move_from.clone(),
                     cx,
                     root,
                     move |cx: &mut Context, root: PathBuf, move_from: &Path| {
@@ -537,15 +540,15 @@ pub fn file_explorer(
                     },
                 )
             },
-        )
+        );
     });
 
     let delete: KeyHandler = Box::new(|cx, (path, _), data, cursor| {
         create_file_operation_prompt(
             cx,
             path,
-            |path| format!("Delete {}? (y/n): ", path.display()),
-            |_| "".to_string(),
+            |path| format!("Delete {}? (Y/n): ", path.display()),
+            |_| "y".to_owned(),
             move |cx, to_delete, confirmation| {
                 let root = data.0.clone();
                 if confirmation != "y" {
@@ -576,7 +579,7 @@ pub fn file_explorer(
 
                 Some(Ok(format!("Deleted file: {}", to_delete.display())))
             },
-        )
+        );
     });
 
     let copy: KeyHandler = Box::new(|cx, (path, _), data, cursor| {
@@ -605,7 +608,7 @@ pub fn file_explorer(
 
                 confirm_before_overwriting(
                     copy_to.to_path_buf(),
-                    copy_from.to_path_buf(),
+                    copy_from.clone(),
                     cx,
                     root,
                     move |cx: &mut Context, picker_root: PathBuf, copy_from: &Path| {
@@ -629,7 +632,7 @@ pub fn file_explorer(
                     },
                 )
             },
-        )
+        );
     });
 
     let columns = [PickerColumn::new(
@@ -637,7 +640,7 @@ pub fn file_explorer(
         |(path, is_dir): &ExplorerItem, (root, directory_style): &ExplorerData| {
             let name = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
             if *is_dir {
-                Span::styled(format!("{}/", name), *directory_style).into()
+                Span::styled(format!("{name}/"), *directory_style).into()
             } else {
                 name.into()
             }
@@ -652,9 +655,13 @@ pub fn file_explorer(
         move |cx, (path, is_dir): &ExplorerItem, action| {
             if *is_dir {
                 let new_root = helix_stdx::path::normalize(path);
+
+                cx.editor.file_explorer_cwd = Some(new_root.clone());
+
                 let callback = Box::pin(async move {
                     let call: Callback =
                         Callback::EditorCompositor(Box::new(move |editor, compositor| {
+                            let new_root = editor.file_explorer_cwd.clone().unwrap_or(new_root);
                             if let Ok(picker) = file_explorer(None, new_root, editor) {
                                 compositor.push(Box::new(overlay::overlaid(picker)));
                             }
@@ -664,7 +671,7 @@ pub fn file_explorer(
                 cx.jobs.callback(callback);
             } else if let Err(e) = cx.editor.open(path, action) {
                 let err = if let Some(err) = e.source() {
-                    format!("{}", err)
+                    format!("{err}")
                 } else {
                     format!("unable to open \"{}\"", path.display())
                 };
@@ -710,7 +717,7 @@ pub mod completers {
     use helix_core::syntax::LanguageServerFeature;
     use helix_view::document::SCRATCH_BUFFER_NAME;
     use helix_view::theme;
-    use helix_view::{editor::Config, Editor};
+    use helix_view::{Editor, editor::Config};
     use once_cell::sync::Lazy;
     use std::borrow::Cow;
     use tui::text::Span;
@@ -723,9 +730,10 @@ pub mod completers {
 
     pub fn buffer(editor: &Editor, input: &str) -> Vec<Completion> {
         let names = editor.documents.values().map(|doc| {
-            doc.relative_path()
-                .map(|p| p.display().to_string().into())
-                .unwrap_or_else(|| Cow::from(SCRATCH_BUFFER_NAME))
+            doc.relative_path().map_or_else(
+                || Cow::from(SCRATCH_BUFFER_NAME),
+                |p| p.display().to_string().into(),
+            )
         });
 
         fuzzy_match(input, names, true)
@@ -753,9 +761,9 @@ pub mod completers {
     /// Recursive function to get all keys from this value and add them to vec
     fn get_keys(value: &serde_json::Value, vec: &mut Vec<String>, scope: Option<&str>) {
         if let Some(map) = value.as_object() {
-            for (key, value) in map.iter() {
+            for (key, value) in map {
                 let key = match scope {
-                    Some(scope) => format!("{}.{}", scope, key),
+                    Some(scope) => format!("{scope}.{key}"),
                     None => key.clone(),
                 };
                 get_keys(value, vec, Some(&key));
@@ -767,7 +775,7 @@ pub mod completers {
     }
 
     pub fn language_servers(editor: &Editor, input: &str) -> Vec<Completion> {
-        let language_servers = doc!(editor).language_servers().map(|ls| ls.name());
+        let language_servers = doc!(editor).language_servers().map(helix_lsp::Client::name);
 
         fuzzy_match(input, language_servers, false)
             .into_iter()
@@ -899,7 +907,7 @@ pub mod completers {
                 Some(String::from("."))
             } else {
                 path.file_name()
-                    .and_then(|file| file.to_str().map(|path| path.to_owned()))
+                    .and_then(|file| file.to_str().map(ToOwned::to_owned))
             };
 
             let path = if is_period {

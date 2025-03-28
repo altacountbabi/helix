@@ -15,7 +15,8 @@ use tui::text::Span;
 pub use typed::*;
 
 use helix_core::{
-    char_idx_at_visual_offset,
+    Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice, Selection, SmallVec,
+    Syntax, Tendril, Transaction, char_idx_at_visual_offset,
     chars::char_is_word,
     comment,
     doc_formatter::TextFormat,
@@ -26,7 +27,7 @@ use helix_core::{
     indent::{self, IndentStyle},
     line_ending::{get_line_ending_of_str, line_end_char_index},
     match_brackets,
-    movement::{self, move_vertically_visual, Direction},
+    movement::{self, Direction, move_vertically_visual},
     object, pos_at_coords,
     regex::{self, Regex},
     search::{self, CharMatcher},
@@ -35,10 +36,10 @@ use helix_core::{
     text_annotations::{Overlay, TextAnnotations},
     textobject,
     unicode::width::UnicodeWidthChar,
-    visual_offset_from_block, Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice,
-    Selection, SmallVec, Syntax, Tendril, Transaction,
+    visual_offset_from_block,
 };
 use helix_view::{
+    Document, DocumentId, Editor, ViewId,
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
     editor::Action,
     info::Info,
@@ -47,10 +48,9 @@ use helix_view::{
     theme::Style,
     tree,
     view::View,
-    Document, DocumentId, Editor, ViewId,
 };
 
-use anyhow::{anyhow, bail, ensure, Context as _};
+use anyhow::{Context as _, anyhow, bail, ensure};
 use insert::*;
 use movement::Movement;
 
@@ -59,7 +59,7 @@ use crate::{
     compositor::{self, Component, Compositor},
     filter_picker_entry,
     job::Callback,
-    ui::{self, overlay::overlaid, Picker, PickerColumn, Popup, Prompt, PromptEvent},
+    ui::{self, Picker, PickerColumn, Popup, Prompt, PromptEvent, overlay::overlaid},
 };
 
 use crate::job::{self, Jobs};
@@ -83,7 +83,7 @@ use serde::de::{self, Deserialize, Deserializer};
 use url::Url;
 
 use grep_regex::RegexMatcherBuilder;
-use grep_searcher::{sinks, BinaryDetection, SearcherBuilder};
+use grep_searcher::{BinaryDetection, SearcherBuilder, sinks};
 use ignore::{DirEntry, WalkBuilder, WalkState};
 
 pub type OnKeyCallback = Box<dyn FnOnce(&mut Context, KeyEvent)>;
@@ -191,7 +191,7 @@ where
     })
 }
 
-use helix_view::{align_view, Align};
+use helix_view::{Align, align_view};
 
 /// MappableCommands are commands that can be bound to keys, executable in
 /// normal, insert or select mode.
@@ -3013,6 +3013,8 @@ fn file_explorer(cx: &mut Context) {
         return;
     }
 
+    let root = cx.editor.file_explorer_cwd.clone().unwrap_or(root);
+
     if let Ok(picker) = ui::file_explorer(None, root, cx.editor) {
         cx.push_layer(Box::new(overlaid(picker)));
     }
@@ -3021,24 +3023,25 @@ fn file_explorer(cx: &mut Context) {
 fn file_explorer_in_current_buffer_directory(cx: &mut Context) {
     let doc_dir = doc!(cx.editor)
         .path()
-        .and_then(|path| path.parent().map(|path| path.to_path_buf()));
+        .and_then(|path| path.parent().map(Path::to_path_buf));
 
-    let path = match doc_dir {
-        Some(path) => path,
-        None => {
-            let cwd = helix_stdx::env::current_working_dir();
-            if !cwd.exists() {
-                cx.editor.set_error(
-                    "Current buffer has no parent and current working directory does not exist",
-                );
-                return;
-            }
+    let path = if let Some(path) = doc_dir {
+        path
+    } else {
+        let cwd = helix_stdx::env::current_working_dir();
+        if !cwd.exists() {
             cx.editor.set_error(
-                "Current buffer has no parent, opening file explorer in current working directory",
+                "Current buffer has no parent and current working directory does not exist",
             );
-            cwd
+            return;
         }
+        cx.editor.set_error(
+            "Current buffer has no parent, opening file explorer in current working directory",
+        );
+        cwd
     };
+
+    let path = cx.editor.file_explorer_cwd.clone().unwrap_or(path);
 
     if let Ok(picker) = ui::file_explorer(None, path, cx.editor) {
         cx.push_layer(Box::new(overlaid(picker)));
@@ -3052,6 +3055,8 @@ fn file_explorer_in_current_directory(cx: &mut Context) {
             .set_error("Current working directory does not exist");
         return;
     }
+
+    let cwd = cx.editor.file_explorer_cwd.clone().unwrap_or(cwd);
 
     if let Ok(picker) = ui::file_explorer(None, cwd, cx.editor) {
         cx.push_layer(Box::new(overlaid(picker)));
@@ -6568,11 +6573,7 @@ fn jump_to_label(cx: &mut Context, labels: Vec<Range>, behaviour: Movement) {
                         }
                     } else {
                         let to = primary_selection.to();
-                        if range.anchor > to {
-                            range.anchor
-                        } else {
-                            to
-                        }
+                        if range.anchor > to { range.anchor } else { to }
                     };
                     Range::new(anchor, range.head)
                 } else {
