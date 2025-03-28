@@ -196,8 +196,7 @@ pub struct FilePickerData {
 }
 type FilePicker = Picker<PathBuf, FilePickerData>;
 
-#[allow(clippy::missing_panics_doc)]
-pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePicker {
+pub fn file_picker(editor: &Editor, root: PathBuf) -> FilePicker {
     use ignore::{WalkBuilder, types::TypesBuilder};
     use std::time::Instant;
 
